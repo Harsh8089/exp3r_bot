@@ -7,12 +7,14 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc -b",
     "start": "tsc -b && node ./dist/bot.js",
-    "dev": "ts-node-dev --respawn --ignore-watch node_modules ./src/bot.ts"
+    "dev": "ts-node-dev --respawn --ignore-watch node_modules ./src/bot.ts",
+    "db:seed": "ts-node-dev prisma/seed.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@prisma/client": "^6.15.0",
     "date-fns": "^4.1.0",
     "dotenv": "^17.2.1",
     "node-telegram-bot-api": "^0.66.0"
@@ -20,6 +22,7 @@
   "devDependencies": {
     "@types/node": "^24.3.0",
     "@types/node-telegram-bot-api": "^0.64.10",
+    "prisma": "^6.14.0",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
     "tsx": "^4.20.5",

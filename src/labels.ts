@@ -36,7 +36,7 @@ const commands: Record<Commands, {
     message: () => '',
   },
   [Commands.Breakdown]: {
-    about: 'Show a category-wise breakdown of your expenses',
+    about: '/br - Show a category-wise breakdown of your expenses',
     error: 'No transactions found for the specified period.',
     message: () => '',
   },

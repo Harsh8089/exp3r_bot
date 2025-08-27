@@ -162,7 +162,7 @@ class ExpenseTrackerBot {
       split.set(txn.category!, txn.amount + amount);
     });
 
-    const header = `Category Breakdown (${period})\n${"=".repeat(30)}\n`;
+    const header = `Category Breakdown (${period || '1yr'})\n${"=".repeat(30)}\n`;
 
     const message = Array.from(split.entries())
       .sort((a, b) => b[1] - a[1])
