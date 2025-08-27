@@ -4,6 +4,7 @@ enum Commands {
   Set = '/set',
   Past = '/past',
   Breakdown = '/br',
+  Undo = '/un',
 }
 
 const commands: Record<Commands, {
@@ -12,32 +13,37 @@ const commands: Record<Commands, {
   message: (amount?: number, wallet?: number) => string
 }> = {
   [Commands.Debit]: {
-    about: '/d <amount> <description> - Record a debit',
+    about: '/d <amount> <description> - Add a debit transaction with amount and category',
     error: '❌ Please provide amount: /d <amount> <category>',
     message: (amount?: number, wallet?: number) =>
-    `💸 Debit added: ₹${amount}\n💳 Current balance: ₹${wallet?.toFixed(2)}`
+      `💸 Debit added: ₹${amount}\n💳 Current balance: ₹${wallet?.toFixed(2)}`
   },
   [Commands.Credit]: {
-    about: '/c <amount> - Record a credit',
+    about: '/c <amount> - Add a credit transaction to increase wallet balance',
     error: '❌ Please provide amount: /c <amount>',
     message: (amount?: number, wallet?: number) =>
-    `💰 Credit added: ₹${amount}\n💳 Current balance: ₹${wallet?.toFixed(2)}`
+      `💰 Credit added: ₹${amount}\n💳 Current balance: ₹${wallet?.toFixed(2)}`
   },
   [Commands.Set]: {
-    about: '/set <amount> - Set wallet amount',
+    about: '/set <amount> - Set your wallet balance to a specific amount',
     error: '❌ Please provide amount: /set <amount>',
-    message: (amount?: number, wallet?: number) =>
-    `✅ Wallet balance set to ₹${wallet?.toFixed(2)}`
+    message: (wallet?: number) =>
+      `✅ Wallet balance set to ₹${wallet?.toFixed(2)}`
   },
   [Commands.Past]: {
-    about: '/past [1d|1w|1m|1y] - Show transaction history',
-    error: '',
+    about: '/past [1d|1w|1m|1y] - View your transaction history for a period',
+    error: 'No transactions found for the specified period.',
     message: () => '',
   },
   [Commands.Breakdown]: {
-    about: 'Category-wise expense breakdown',
-    error: '',
+    about: 'Show a category-wise breakdown of your expenses',
+    error: 'No transactions found for the specified period.',
     message: () => '',
+  },
+  [Commands.Undo]: {
+    about: '/undo - Remove your most recent transaction',
+    error: '❌ No transaction found to undo.',
+    message: () => '✅ Latest transaction has been removed',
   }
 }
 

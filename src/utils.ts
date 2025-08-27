@@ -1,14 +1,7 @@
 import TelegramBot from "node-telegram-bot-api";
 import { subDays } from "date-fns";
 import { Commands, commands, labels } from "./labels";
-
-interface Transaction {
-  id: number,
-  type: 'credit' | 'debit',
-  amount: number,
-  category?: string
-  date: Date
-}
+import { Transaction } from "./types";
 
 class ExpenseTrackerBot {
   public bot: TelegramBot;
@@ -39,6 +32,10 @@ class ExpenseTrackerBot {
         return this.getTransactionHistory(msg, args);
       case '/br':
         return this.getCategorySplit(msg, args);
+      case '/undo':
+        return this.handleUndo(msg);
+      case'/start':
+        return this.handleHelp(msg);
       case '/help':
         return this.handleHelp(msg);
       default:
@@ -47,9 +44,9 @@ class ExpenseTrackerBot {
   }
 
   handleHelp(msg: TelegramBot.Message) {
-  const helpText = `🤖 Expense Tracker Bot Commands\n${'='.repeat(30)}\n${Object.values(commands)
-    .map(msgInfo => msgInfo.about)
-    .join('\n\n')}`;
+    const helpText = `🤖 Expense Tracker Bot Commands\n${'='.repeat(30)}\n${Object.values(commands)
+      .map(msgInfo => msgInfo.about)
+      .join('\n\n')}`;
 
     this.bot.sendMessage(msg.chat.id, helpText);
   }
@@ -113,6 +110,7 @@ class ExpenseTrackerBot {
     if(isNaN(amount) || amount <= 0) {
       return this.sendError(msg, labels.invalidAmount);
     }
+    this.wallet = amount;
     const message = msgInfo.message(this.wallet);
     return this.bot.sendMessage(msg.chat.id, message);
   } 
@@ -121,9 +119,10 @@ class ExpenseTrackerBot {
     const [period] = args;
     const days = (period === '1d') ? 1 : (period === '1w') ? 7 : (period === '1m') ? 30 : 365
     const txns = this.transactions.filter(txn => txn.date > subDays(new Date(), days));
+    const msgInfo = commands[Commands.Past];
 
     if(!txns.length) {
-      return this.bot.sendMessage(msg.chat.id, 'No transactions found for the specified period.');
+      return this.bot.sendMessage(msg.chat.id, msgInfo.error);
     }
 
     const header = `Txn History (${period})\n${'='.repeat(30)}\n`;
@@ -148,7 +147,45 @@ class ExpenseTrackerBot {
   }
   
   getCategorySplit(msg: TelegramBot.Message, args: string[]) {
+    const [period] = args;
+    const days = (period === '1d') ? 1 : (period === '1w') ? 7 : (period === '1m') ? 30 : 365
+    const txns = this.transactions.filter(txn => txn.date > subDays(new Date(), days) && txn.type === 'debit');
+    const msgInfo = commands[Commands.Breakdown];
 
+    if(!txns.length) {
+      return this.bot.sendMessage(msg.chat.id, msgInfo.error);
+    }
+
+    const split = new Map<string, number>();
+    txns.forEach(txn => {
+      const amount = split.get(txn.category!) || 0;
+      split.set(txn.category!, txn.amount + amount);
+    });
+
+    const header = `Category Breakdown (${period})\n${"=".repeat(30)}\n`;
+
+    const message = Array.from(split.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([category, amount]) => {
+        return `📊 ${category} → ₹${amount}`;
+      })
+      .join("\n");
+
+    const totalSpent = txns.reduce((sum, txn) => sum + txn.amount, 0);
+    const footer = `\n${"=".repeat(30)}\n💸 Total Spent: ₹${totalSpent} (${txns.length} debit transactions)`;
+
+    return this.bot.sendMessage(msg.chat.id, header + message + footer, {
+      parse_mode: "HTML",
+    });
+  }
+
+  handleUndo(msg: TelegramBot.Message) {
+    const msgInfo = commands[Commands.Undo];
+    if(!this.transactions.length) {
+      return this.sendError(msg, msgInfo.error);
+    }
+    this.transactions.pop();
+    return this.bot.sendMessage(msg.chat.id, msgInfo.message());
   }
 
   sendError(msg: TelegramBot.Message, customMessage: string = 'Invalid command') {
