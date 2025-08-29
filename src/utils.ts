@@ -2,26 +2,64 @@ import TelegramBot from "node-telegram-bot-api";
 import { subDays } from "date-fns";
 import { Commands, commands, labels } from "./labels";
 import { PrismaClient, TransactionType } from "./generated/prisma";
+import { LRUCache } from 'lru-cache';
 
 const prisma = new PrismaClient({
   datasources: {
     db: {
-      url: process.env.DATABASE_URL + "?connection_limit=1&pool_timeout=0"
+      url: process.env.DATABASE_URL + "?connection_limit=10&pool_timeout=20&statement_cache_size=100"
     }
   }
 });
+
+interface UserData {
+  id: bigint,
+  name: string,
+  walletAmount: number,
+  lastUpdated: number,
+}
+
+interface CategoryData {
+  id: number;
+  name: string;
+}
+
+const userCache = new LRUCache<string, UserData>({
+  max: 1000,
+  ttl: 5 * 60 * 1000
+});
+
+const categoryCache = new LRUCache<string, CategoryData>({
+  max: 500,       
+  ttl: 30 * 60 * 1000
+});
+
+const CACHE_TTL = 5 * 60 * 1000;
 
 class ExpenseTrackerBot {
   public bot: TelegramBot;
 
   constructor(token: string, options: TelegramBot.ConstructorOptions) {
     this.bot = new TelegramBot(token, options);
+    this.preLoadCategories();
   }
 
-  async handleMessage(msg: TelegramBot.Message) {
-    const text = msg.text;
-    const userId = BigInt(msg.chat.id);
-    const name = `${msg.chat.first_name} ${msg.chat.last_name}`;
+  async preLoadCategories() {
+    const categories = await prisma.category.findMany({
+      take: 50
+    });
+    categories.forEach(cat => 
+      categoryCache.set(cat.name, cat)
+    );
+  }
+
+  async getCachedUser(userId: bigint, name: string) {
+    const cacheKey = userId.toString();
+    const cacheValue = userCache.get(cacheKey);
+
+    if(cacheValue && (Date.now() - cacheValue.lastUpdated) <= CACHE_TTL) {
+      return cacheValue;
+    }
 
     await prisma.user.upsert({
       where: { id: userId },
@@ -30,8 +68,53 @@ class ExpenseTrackerBot {
         id: userId,
         name,
         walletAmount: 0
-      }
+      },
+    }); 
+
+    const user = {
+      id: userId,
+      name,
+      walletAmount: 0,
+      lastUpdated: Date.now()
+    }
+
+    userCache.set(cacheKey, user);
+    return user;
+  }
+
+  updateUserCache(userId: bigint, walletAmount: number) {
+    const cacheKey = userId.toString();
+    const cacheValue = userCache.get(cacheKey);
+
+    if(cacheValue) {
+      cacheValue.walletAmount = walletAmount;
+      cacheValue.lastUpdated = Date.now()
+    }
+  }
+
+  async getCachedCategory(categoryName: string) {
+    const cacheValue = categoryCache.get(categoryName);
+
+    if(cacheValue) {
+      return cacheValue;
+    }
+
+    const categoryInDb = await prisma.category.upsert({
+      where: { name: categoryName },
+      update: {},
+      create: { name: categoryName }
     });
+    
+    categoryCache.set(categoryName, categoryInDb);
+    return categoryInDb;
+  }
+
+  async handleMessage(msg: TelegramBot.Message) {
+    const text = msg.text;
+    const userId = BigInt(msg.chat.id);
+    const name = `${msg.chat.first_name} ${msg.chat.last_name}`.trim();
+
+    this.getCachedUser(userId, name);
 
     if(!text || !text.startsWith('/')) {
       return this.sendError(msg);
@@ -80,9 +163,9 @@ class ExpenseTrackerBot {
       return this.sendError(msg, labels.invalidAmount);
     }
 
-    const userId = BigInt(msg.chat.id);
+    const userId = msg.chat.id;
     const updatedUser = await prisma.user.update({
-      where: { id: userId },
+      where: { id: BigInt(userId) },
       data: {
         walletAmount: {
           increment: amount
@@ -96,8 +179,11 @@ class ExpenseTrackerBot {
         }
       }
     });
+    
+    this.updateUserCache(BigInt(userId), updatedUser.walletAmount);
+
     const message = msgInfo.message(amount, updatedUser.walletAmount);
-    return this.bot.sendMessage(msg.chat.id, message);
+    return this.bot.sendMessage(userId, message);
   }
 
   async handleDebit(msg: TelegramBot.Message, args: string[]) {
@@ -113,11 +199,7 @@ class ExpenseTrackerBot {
     }
 
     const userId = BigInt(msg.chat.id);
-    const categoryInDb = await prisma.category.upsert({
-      where: { name: category },
-      update: {},
-      create: { name: category }
-    });
+    const categoryInDb = await this.getCachedCategory(category);
     const updatedUser = await prisma.user.update({
       where: { id: userId },
       data: {
@@ -133,7 +215,10 @@ class ExpenseTrackerBot {
           }
         }
       }
-    })
+    });
+
+    this.updateUserCache(BigInt(userId), updatedUser.walletAmount);
+
     const message = msgInfo.message(amount, updatedUser.walletAmount);
     return this.bot.sendMessage(msg.chat.id, message);
   }
@@ -157,6 +242,9 @@ class ExpenseTrackerBot {
         walletAmount: amount
       }
     });
+
+    this.updateUserCache(BigInt(userId), amount);
+
     const message = msgInfo.message(amount);
     return this.bot.sendMessage(msg.chat.id, message);
   } 
@@ -165,35 +253,29 @@ class ExpenseTrackerBot {
     const [period] = args;
     const days = (period === '1d') ? 1 : (period === '1w') ? 7 : (period === '1m') ? 30 : 365
     const userId = BigInt(msg.chat.id);
-    const userInDb = await prisma.user.findFirst({
+    const txns = await prisma.transaction.findMany({
       where: {
-        id: userId
+        userId,
+        date: {
+          gte: subDays(new Date(), days)
+        }
+      },
+      orderBy: {
+        date: 'desc'
       },
       select: {
-        transactions: {
-          where: {
-            date: {
-              gt: subDays(new Date(), days)
-            }
-          },
-          orderBy: {
-            date: 'desc'
-          },
+        id: true,
+        type: true,
+        amount: true,
+        category: {
           select: {
-            id: true,
-            amount: true,
-            type: true,
-            date: true,
-            category: {
-              select: {
-                name: true
-              }
-            }
+            name: true
           }
-        }
-      }
+        },
+        date: true
+      },
+      take: 100
     });
-    const txns = userInDb?.transactions ?? [];
     const msgInfo = commands[Commands.Past];
 
     if(!txns.length) {
@@ -226,86 +308,95 @@ class ExpenseTrackerBot {
     const days = (period === '1d') ? 1 : (period === '1w') ? 7 : (period === '1m') ? 30 : 365
 
     const userId = BigInt(msg.chat.id);
-    const userInDb = await prisma.user.findFirst({
+    const categorySpends = await prisma.transaction.groupBy({
+      by: ['categoryId'],
       where: {
-        id: userId
-      },
-      select: {
-        transactions: {
-          where: {
-            date: {
-              gt: subDays(new Date(), days)
-            },
-            type: TransactionType.DEBIT
-          },
-          orderBy: {
-            date: 'desc'
-          },
-          select: {
-            id: true,
-            amount: true,
-            type: true,
-            date: true,
-            category: {
-              select: {
-                name: true
-              }
-            }
-          }
+        userId,
+        type: TransactionType.DEBIT,
+        date: {
+          gte: subDays(new Date(), days)
         }
-      }
+      },
+      _sum: {
+        amount: true
+      },
+      _count: {
+        id: true
+      },
     });
-    const txns = userInDb?.transactions ?? [];
     const msgInfo = commands[Commands.Breakdown];
 
-    if(!txns.length) {
+    if(!categorySpends.length) {
       return this.bot.sendMessage(msg.chat.id, msgInfo.error);
     }
 
-    const split = new Map<string, number>();
-    txns.forEach(txn => {
-      const amount = split.get(txn.category?.name!) || 0;
-      split.set(txn.category?.name!, txn.amount + amount);
+    const categoryIds = categorySpends
+      .filter(cs => cs.categoryId !== null)
+      .map(cs => cs.categoryId!);
+
+    const categories = await prisma.category.findMany({
+      where: {
+        id: {
+          in: categoryIds
+        }
+      },
+      select: {
+        id: true, 
+        name: true
+      }
     });
+
+    const categoryMap = new Map(categories.map(c => [c.id, c.name]));
 
     const header = `Category Breakdown (${period || '1yr'})\n${"=".repeat(30)}\n`;
 
-    const message = Array.from(split.entries())
-      .sort((a, b) => b[1] - a[1])
-      .map(([category, amount]) => {
-        return `📊 ${category} → ₹${amount}`;
+    const message = categorySpends
+      .filter(cs => cs.categoryId && cs._sum.amount)
+      .sort((a, b) => (b._sum.amount || 0) - (a._sum.amount || 0))
+      .map(cs => {
+        const categoryName = categoryMap.get(cs.categoryId!) || 'Unknown';
+        return `📊 ${categoryName} → ₹${cs._sum.amount}`;
       })
       .join("\n");
 
-    const totalSpent = txns.reduce((sum, txn) => sum + txn.amount, 0);
-    const footer = `\n${"=".repeat(30)}\n💸 Total Spent: ₹${totalSpent} (${txns.length} debit transactions)`;
+    const totalSpent = categorySpends.reduce((sum, cs) => sum + (cs._sum.amount || 0), 0);
+    const totalTransactions = categorySpends.reduce((sum, cs) => sum + cs._count.id, 0);
+    const footer = `\n${"=".repeat(30)}\n💸 Total Spent: ₹${totalSpent} (${totalTransactions} debit transactions)`;
 
-    return this.bot.sendMessage(msg.chat.id, header + message + footer, {
-      parse_mode: "HTML",
-    });
+    return this.bot.sendMessage(msg.chat.id, header + message + footer);
   }
 
   async handleUndo(msg: TelegramBot.Message) {
     const msgInfo = commands[Commands.Undo];
     const userId = BigInt(msg.chat.id);
-    const userInDb = await prisma.user.findFirst({
-      where: { id: userId },
-      select: {
-        transactions: true
-      }
-    });
-    const txns = userInDb?.transactions ?? [];
-    if(!txns.length) {
-      return this.sendError(msg, msgInfo.error);
-    }
-
     const latestTxn = await prisma.transaction.findFirst({
       where: { userId },
       orderBy: { date: 'desc' },
+      select: { id: true, amount: true, type: true }
     });
-    await prisma.transaction.delete({
-      where: { id: latestTxn?.id },
-    })
+
+    if (!latestTxn) {
+      return this.sendError(msg, msgInfo.error);
+    }
+
+    await prisma.$transaction(async(prisma) => {
+      await prisma.transaction.delete({
+        where: { id: latestTxn.id}
+      });
+
+      const increment = latestTxn.type === TransactionType.DEBIT 
+        ? latestTxn.amount 
+        : -latestTxn.amount;
+      
+      const updatedUser = await prisma.user.update({
+        where: { id: userId },
+        data: {
+          walletAmount: { increment }
+        }
+      });
+
+      this.updateUserCache(userId, updatedUser.walletAmount);
+    });
     return this.bot.sendMessage(msg.chat.id, msgInfo.message());
   }
 
