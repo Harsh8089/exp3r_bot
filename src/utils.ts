@@ -1,21 +1,38 @@
 import TelegramBot from "node-telegram-bot-api";
 import { subDays } from "date-fns";
 import { Commands, commands, labels } from "./labels";
-import { Transaction } from "./types";
+import { PrismaClient, TransactionType } from "./generated/prisma";
+
+const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: process.env.DATABASE_URL + "?connection_limit=1&pool_timeout=0"
+    }
+  }
+});
 
 class ExpenseTrackerBot {
   public bot: TelegramBot;
-  public wallet: number;
-  public transactions: Transaction[];
 
   constructor(token: string, options: TelegramBot.ConstructorOptions) {
     this.bot = new TelegramBot(token, options);
-    this.wallet = 0;
-    this.transactions = [];
   }
 
-  handleMessage(msg: TelegramBot.Message) {
+  async handleMessage(msg: TelegramBot.Message) {
     const text = msg.text;
+    const userId = BigInt(msg.chat.id);
+    const name = `${msg.chat.first_name} ${msg.chat.last_name}`;
+
+    await prisma.user.upsert({
+      where: { id: userId },
+      update: {},
+      create: {
+        id: userId,
+        name,
+        walletAmount: 0
+      }
+    });
+
     if(!text || !text.startsWith('/')) {
       return this.sendError(msg);
     }
@@ -51,7 +68,7 @@ class ExpenseTrackerBot {
     this.bot.sendMessage(msg.chat.id, helpText);
   }
 
-  handleCredit(msg: TelegramBot.Message, args: string[]) {
+  async handleCredit(msg: TelegramBot.Message, args: string[]) {
     const [amountStr] = args;
     const msgInfo = commands[Commands.Credit];
     if(!amountStr) {
@@ -63,19 +80,27 @@ class ExpenseTrackerBot {
       return this.sendError(msg, labels.invalidAmount);
     }
 
-    this.wallet += amount;
-    this.transactions.push({
-      id: this.transactions.length,
-      type: 'credit',
-      amount,
-      date: new Date()
+    const userId = BigInt(msg.chat.id);
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        walletAmount: {
+          increment: amount
+        },
+        transactions: {
+          create: {
+            amount,
+            type: TransactionType.CREDIT,
+            date: new Date()
+          }
+        }
+      }
     });
-
-    const message = msgInfo.message(amount, this.wallet);
+    const message = msgInfo.message(amount, updatedUser.walletAmount);
     return this.bot.sendMessage(msg.chat.id, message);
   }
 
-  handleDebit(msg: TelegramBot.Message, args: string[]) {
+  async handleDebit(msg: TelegramBot.Message, args: string[]) {
     const [amountStr, category] = args;
     const msgInfo = commands[Commands.Debit];
     if(!amountStr || !category) {
@@ -87,19 +112,33 @@ class ExpenseTrackerBot {
       return this.sendError(msg, labels.invalidAmount);
     }
 
-    this.wallet -= amount;
-    this.transactions.push({
-      id: this.transactions.length,
-      type: 'debit',
-      amount,
-      category,
-      date: new Date()
+    const userId = BigInt(msg.chat.id);
+    const categoryInDb = await prisma.category.upsert({
+      where: { name: category },
+      update: {},
+      create: { name: category }
     });
-    const message = msgInfo.message(amount, this.wallet);
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        walletAmount: {
+          decrement: amount
+        },
+        transactions: {
+          create: {
+            amount,
+            categoryId: categoryInDb.id,
+            type: TransactionType.DEBIT,
+            date: new Date()
+          }
+        }
+      }
+    })
+    const message = msgInfo.message(amount, updatedUser.walletAmount);
     return this.bot.sendMessage(msg.chat.id, message);
   }
 
-  setWallet(msg: TelegramBot.Message, args: string[]) {
+  async setWallet(msg: TelegramBot.Message, args: string[]) {
     const [amountStr] = args;
     const msgInfo = commands[Commands.Set];
     if(!amountStr) {
@@ -110,15 +149,51 @@ class ExpenseTrackerBot {
     if(isNaN(amount) || amount <= 0) {
       return this.sendError(msg, labels.invalidAmount);
     }
-    this.wallet = amount;
-    const message = msgInfo.message(this.wallet);
+
+    const userId = BigInt(msg.chat.id);
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        walletAmount: amount
+      }
+    });
+    const message = msgInfo.message(amount);
     return this.bot.sendMessage(msg.chat.id, message);
   } 
 
-  getTransactionHistory(msg: TelegramBot.Message, args: string[]) {
+  async getTransactionHistory(msg: TelegramBot.Message, args: string[]) {
     const [period] = args;
     const days = (period === '1d') ? 1 : (period === '1w') ? 7 : (period === '1m') ? 30 : 365
-    const txns = this.transactions.filter(txn => txn.date > subDays(new Date(), days));
+    const userId = BigInt(msg.chat.id);
+    const userInDb = await prisma.user.findFirst({
+      where: {
+        id: userId
+      },
+      select: {
+        transactions: {
+          where: {
+            date: {
+              gt: subDays(new Date(), days)
+            }
+          },
+          orderBy: {
+            date: 'desc'
+          },
+          select: {
+            id: true,
+            amount: true,
+            type: true,
+            date: true,
+            category: {
+              select: {
+                name: true
+              }
+            }
+          }
+        }
+      }
+    });
+    const txns = userInDb?.transactions ?? [];
     const msgInfo = commands[Commands.Past];
 
     if(!txns.length) {
@@ -131,14 +206,14 @@ class ExpenseTrackerBot {
       .sort((a, b) => b.date.getTime() - a.date.getTime())
       .map(txn => {
         const date = txn.date.toLocaleDateString();
-        const typeIcon = txn.type === 'debit' ? '💸' : '💰';
-        const category = txn.category ? ` | ${txn.category}` : '';
+        const typeIcon = txn.type === TransactionType.DEBIT ? '💸' : '💰';
+        const category = txn.category?.name ? ` | ${txn.category.name}` : '';
         return `${typeIcon} ${date} | ${txn.type.toUpperCase()} ₹${txn.amount}${category}`;
       })
       .join('\n');
     
     const total = txns.reduce((sum, txn) => 
-      sum + (txn.type === 'debit' ? -txn.amount : txn.amount), 0
+      sum + (txn.type === TransactionType.DEBIT ? -txn.amount : txn.amount), 0
     );
 
     const footer = `\n${'='.repeat(30)}\n📈 Net: ₹${total} (${txns.length} transactions)`;
@@ -146,10 +221,41 @@ class ExpenseTrackerBot {
     return this.bot.sendMessage(msg.chat.id, header + message + footer, { parse_mode: 'HTML' });
   }
   
-  getCategorySplit(msg: TelegramBot.Message, args: string[]) {
+  async getCategorySplit(msg: TelegramBot.Message, args: string[]) {
     const [period] = args;
     const days = (period === '1d') ? 1 : (period === '1w') ? 7 : (period === '1m') ? 30 : 365
-    const txns = this.transactions.filter(txn => txn.date > subDays(new Date(), days) && txn.type === 'debit');
+
+    const userId = BigInt(msg.chat.id);
+    const userInDb = await prisma.user.findFirst({
+      where: {
+        id: userId
+      },
+      select: {
+        transactions: {
+          where: {
+            date: {
+              gt: subDays(new Date(), days)
+            },
+            type: TransactionType.DEBIT
+          },
+          orderBy: {
+            date: 'desc'
+          },
+          select: {
+            id: true,
+            amount: true,
+            type: true,
+            date: true,
+            category: {
+              select: {
+                name: true
+              }
+            }
+          }
+        }
+      }
+    });
+    const txns = userInDb?.transactions ?? [];
     const msgInfo = commands[Commands.Breakdown];
 
     if(!txns.length) {
@@ -158,8 +264,8 @@ class ExpenseTrackerBot {
 
     const split = new Map<string, number>();
     txns.forEach(txn => {
-      const amount = split.get(txn.category!) || 0;
-      split.set(txn.category!, txn.amount + amount);
+      const amount = split.get(txn.category?.name!) || 0;
+      split.set(txn.category?.name!, txn.amount + amount);
     });
 
     const header = `Category Breakdown (${period || '1yr'})\n${"=".repeat(30)}\n`;
@@ -179,12 +285,27 @@ class ExpenseTrackerBot {
     });
   }
 
-  handleUndo(msg: TelegramBot.Message) {
+  async handleUndo(msg: TelegramBot.Message) {
     const msgInfo = commands[Commands.Undo];
-    if(!this.transactions.length) {
+    const userId = BigInt(msg.chat.id);
+    const userInDb = await prisma.user.findFirst({
+      where: { id: userId },
+      select: {
+        transactions: true
+      }
+    });
+    const txns = userInDb?.transactions ?? [];
+    if(!txns.length) {
       return this.sendError(msg, msgInfo.error);
     }
-    this.transactions.pop();
+
+    const latestTxn = await prisma.transaction.findFirst({
+      where: { userId },
+      orderBy: { date: 'desc' },
+    });
+    await prisma.transaction.delete({
+      where: { id: latestTxn?.id },
+    })
     return this.bot.sendMessage(msg.chat.id, msgInfo.message());
   }
 
