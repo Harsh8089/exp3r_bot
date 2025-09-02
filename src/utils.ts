@@ -25,7 +25,7 @@ interface CategoryData {
 }
 
 const userCache = new LRUCache<string, UserData>({
-  max: 1000,
+  max: 100,
   ttl: 5 * 60 * 1000
 });
 
@@ -61,25 +61,39 @@ class ExpenseTrackerBot {
       return cacheValue;
     }
 
-    await prisma.user.upsert({
-      where: { id: userId },
-      update: {},
-      create: {
+    try {
+      const user = await prisma.user.findFirst({
+        where: {
+          id: userId
+        }
+      });
+
+      if(!user) {
+        await prisma.user.create({
+          data: {
+            id: userId,
+            name,
+            walletAmount: 0
+          }
+        });
+      }
+
+      const userData = {
         id: userId,
         name,
-        walletAmount: 0
-      },
-    }); 
-
-    const user = {
-      id: userId,
-      name,
-      walletAmount: 0,
-      lastUpdated: Date.now()
-    }
-
-    userCache.set(cacheKey, user);
-    return user;
+        walletAmount: 0,
+        lastUpdated: Date.now()
+      };
+      userCache.set(cacheKey, userData);
+    } catch (error) {
+      console.error('Database error in getCachedUser:', error);
+      return {
+        id: userId,
+        name,
+        walletAmount: 0,
+        lastUpdated: Date.now()
+      };
+    } 
   }
 
   updateUserCache(userId: bigint, walletAmount: number) {
@@ -88,7 +102,8 @@ class ExpenseTrackerBot {
 
     if(cacheValue) {
       cacheValue.walletAmount = walletAmount;
-      cacheValue.lastUpdated = Date.now()
+      cacheValue.lastUpdated = Date.now();
+      userCache.set(cacheKey, cacheValue);
     }
   }
 
@@ -99,14 +114,26 @@ class ExpenseTrackerBot {
       return cacheValue;
     }
 
-    const categoryInDb = await prisma.category.upsert({
-      where: { name: categoryName },
-      update: {},
-      create: { name: categoryName }
-    });
-    
-    categoryCache.set(categoryName, categoryInDb);
-    return categoryInDb;
+    try {
+      let category = await prisma.category.findFirst({
+        where: {
+          name: categoryName
+        }
+      });
+
+      if(!category) {
+        category = await prisma.category.create({
+          data: {
+            name: categoryName
+          }
+        });
+      }
+      categoryCache.set(categoryName, category);
+      return category;
+    } catch (error) {
+      console.error('Database error in getCachedCategory:', error);
+      throw error;
+    }
   }
 
   async handleMessage(msg: TelegramBot.Message) {
@@ -164,26 +191,33 @@ class ExpenseTrackerBot {
     }
 
     const userId = msg.chat.id;
-    const updatedUser = await prisma.user.update({
-      where: { id: BigInt(userId) },
-      data: {
-        walletAmount: {
-          increment: amount
-        },
-        transactions: {
-          create: {
-            amount,
-            type: TransactionType.CREDIT,
-            date: new Date()
+    try {
+      const updatedUser = await prisma.user.update({
+        where: { id: BigInt(userId) },
+        data: {
+          walletAmount: {
+            increment: amount
+          },
+          transactions: {
+            create: {
+              amount,
+              type: TransactionType.CREDIT,
+              date: new Date()
+            }
           }
+        },
+        select: {
+          walletAmount: true
         }
-      }
-    });
-    
-    this.updateUserCache(BigInt(userId), updatedUser.walletAmount);
+      });
+      this.updateUserCache(BigInt(userId), updatedUser.walletAmount);
 
-    const message = msgInfo.message(amount, updatedUser.walletAmount);
-    return this.bot.sendMessage(userId, message);
+      const message = msgInfo.message(amount, updatedUser.walletAmount);
+      return this.bot.sendMessage(userId, message);
+    } catch (error) {
+      console.error('Credit operation failed:', error);
+      return this.sendError(msg, 'Failed to process credit. Please try again.');
+    }
   }
 
   async handleDebit(msg: TelegramBot.Message, args: string[]) {
@@ -200,27 +234,34 @@ class ExpenseTrackerBot {
 
     const userId = BigInt(msg.chat.id);
     const categoryInDb = await this.getCachedCategory(category);
-    const updatedUser = await prisma.user.update({
-      where: { id: userId },
-      data: {
-        walletAmount: {
-          decrement: amount
-        },
-        transactions: {
-          create: {
-            amount,
-            categoryId: categoryInDb.id,
-            type: TransactionType.DEBIT,
-            date: new Date()
+    try {
+      const updatedUser = await prisma.user.update({
+        where: { id: userId },
+        data: {
+          walletAmount: {
+            decrement: amount
+          },
+          transactions: {
+            create: {
+              amount,
+              categoryId: categoryInDb.id,
+              type: TransactionType.DEBIT,
+              date: new Date()
+            }
           }
+        },
+        select: {
+          walletAmount: true
         }
-      }
-    });
+      });
+      this.updateUserCache(BigInt(userId), updatedUser.walletAmount);
 
-    this.updateUserCache(BigInt(userId), updatedUser.walletAmount);
-
-    const message = msgInfo.message(amount, updatedUser.walletAmount);
-    return this.bot.sendMessage(msg.chat.id, message);
+      const message = msgInfo.message(amount, updatedUser.walletAmount);
+      return this.bot.sendMessage(msg.chat.id, message);
+    } catch (error) {
+      console.error('Debit operation failed:', error);
+      return this.sendError(msg, 'Failed to process debit. Please try again.')
+    }
   }
 
   async setWallet(msg: TelegramBot.Message, args: string[]) {
@@ -236,17 +277,20 @@ class ExpenseTrackerBot {
     }
 
     const userId = BigInt(msg.chat.id);
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        walletAmount: amount
-      }
-    });
+    try {
+      await prisma.user.update({
+        where: { id: userId },
+        data: { walletAmount: amount }
+      });
 
-    this.updateUserCache(BigInt(userId), amount);
+      this.updateUserCache(userId, amount);
 
-    const message = msgInfo.message(amount);
-    return this.bot.sendMessage(msg.chat.id, message);
+      const message = msgInfo.message(amount);
+      return this.bot.sendMessage(msg.chat.id, message);
+    } catch (error) {
+      console.error('Set wallet failed:', error);
+      return this.sendError(msg, 'Failed to update wallet. Please try again.');
+    }
   } 
 
   async getTransactionHistory(msg: TelegramBot.Message, args: string[]) {
