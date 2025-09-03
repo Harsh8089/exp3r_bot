@@ -7,7 +7,7 @@ import { HandlerResponse } from "../types";
 class UndoHandler {
   public static async undoLastTransaction(
     msg: TelegramBot.Message
-  ) {
+  ): Promise<HandlerResponse> {
     const msgInfo = commands[Commands.Undo];
     const userId = BigInt(msg.chat.id);
     

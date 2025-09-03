@@ -8,7 +8,7 @@ class CreditHandler {
   public static async handleCredit(
     msg: TelegramBot.Message,
     args: string[]
-  ) {
+  ): Promise<HandlerResponse> {
     const [amountStr] = args;
     const msgInfo = commands[Commands.Credit];
 

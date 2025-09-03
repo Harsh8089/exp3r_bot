@@ -129,7 +129,7 @@ export class ExpenseTrackerBot {
     command: string, 
     msg: TelegramBot.Message, 
     args: string[]
-  ): Promise<HandlerResponse | null> {
+  ): Promise<HandlerResponse> {
     switch (command) {
       case '/d':
         return await processDebitTransaction(msg, args);

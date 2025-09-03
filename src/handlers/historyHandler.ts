@@ -11,7 +11,7 @@ class HistoryHandler {
   public static async getTransactionHistory(
     msg: TelegramBot.Message,
     args: string[],
-  ) {
+  ): Promise<HandlerResponse> {
     const [period] = args;
     let days;
     if(this.isPeriod(period)) {

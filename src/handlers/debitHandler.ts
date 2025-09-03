@@ -8,7 +8,7 @@ export class DebitHandler {
   public static async handleDebit(
     msg: TelegramBot.Message,
     args: string[]
-  ) { 
+  ): Promise<HandlerResponse> { 
     const [amountStr, category] = args;
     const msgInfo = commands[Commands.Debit];
     if(!amountStr || !category) {
