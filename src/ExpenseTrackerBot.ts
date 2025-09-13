@@ -1,12 +1,19 @@
 import TelegramBot from "node-telegram-bot-api";
-import { commands } from "./labels";
-import { CacheService } from "./services/cacheService";
-import { DatabaseService } from "./services/databaseService";
+import { 
+  Commands, 
+  commands, 
+  labels 
+} from "./labels";
+import cacheService from "./services/cacheService";
+import dbService from "./services/databaseService";
 import { HandlerResponse } from "./types";
 import { undoLastTransaction } from "./handlers/undoHandler";
 import { processDebitTransaction } from "./handlers/debitHandler";
 import { processCreditTransaction } from "./handlers/creditHandler";
-import { getCategoryBreakdown, getTransactionHistory } from "./handlers/historyHandler";
+import { 
+  getCategoryBreakdown, 
+  getTransactionHistory 
+} from "./handlers/historyHandler";
 
 export class ExpenseTrackerBot {
   public bot: TelegramBot;
@@ -28,7 +35,7 @@ export class ExpenseTrackerBot {
       }
 
       const [command, ...args] = text.split(' ');
-      const result = await this.routeCommand(command, msg, args);
+      const result = await this.routeCommand(command, args, msg);
       if (result) {
         await this.bot.sendMessage(msg.chat.id, result.message, { 
           parse_mode: command === '/past' ? 'HTML' : undefined 
@@ -42,32 +49,27 @@ export class ExpenseTrackerBot {
 
   private async handleSetWallet(msg: TelegramBot.Message, args: string[]): Promise<HandlerResponse> {
     const [amountStr] = args;
+    const msgInfo = commands[Commands.Set];
     if (!amountStr) {
-      return { success: false, message: 'Please provide an amount' };
+      return { 
+        success: false, 
+        message: msgInfo.error 
+      };
     }
 
     const amount = parseFloat(amountStr);
     if (isNaN(amount) || amount < 0) {
-      return { success: false, message: 'Invalid amount' };
+      return { success: false, message: labels.invalidAmount };
     }
 
     const userId = BigInt(msg.chat.id);
     const userName = `${msg.chat.first_name || ''} ${msg.chat.last_name || ''}`.trim();
-    const dbService = new DatabaseService();
-    const cacheService = new CacheService();
-
     try {
-      const updatedUser = await dbService.updateUserWallet(
+      await dbService.updateUserWallet(
         userId.toString(), 
-        amount
+        amount,
+        userName
       );
-      
-      cacheService.updateUser(userId.toString(), {
-        id: userId,
-        name: userName,
-        walletAmount: updatedUser.walletAmount,
-      });
-
       return {
         success: true,
         message: `✅ Wallet set to ₹${amount}`
@@ -96,11 +98,9 @@ export class ExpenseTrackerBot {
     userName: string,
     walletAmount: number = 0
   ) {
-    const cacheService = new CacheService();
     const cached = cacheService.getUser(userId);
     try {
       if(!cached) {
-        const dbService = new DatabaseService();
         let user = await dbService.findUser(userId);
         if(!user) {
           user = await dbService.createUser(
@@ -127,8 +127,8 @@ export class ExpenseTrackerBot {
 
   private async routeCommand(
     command: string, 
-    msg: TelegramBot.Message, 
-    args: string[]
+    args: string[],
+    msg: TelegramBot.Message,
   ): Promise<HandlerResponse> {
     switch (command) {
       case '/d':

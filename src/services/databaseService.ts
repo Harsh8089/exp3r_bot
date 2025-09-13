@@ -1,15 +1,13 @@
 import { subDays } from "date-fns";
-import { Category, PrismaClient, Transaction, TransactionType, User } from "../generated/prisma";
-
-export interface CategorySpend {
-  categoryId: number | null;
-  _sum: {
-    amount: number | null;
-  };
-  _count: {
-    id: number;
-  };
-}
+import { 
+  Category, 
+  PrismaClient, 
+  Transaction, 
+  TransactionType, 
+  User 
+} from "../generated/prisma";
+import cacheService from "./cacheService";
+import { CategorySpend } from "../types";
 
 export class DatabaseService {
   private prisma: PrismaClient;
@@ -55,9 +53,13 @@ export class DatabaseService {
     }
   }
 
-  async updateUserWallet(userId: string, walletAmount: number): Promise<User> {
+  async updateUserWallet(
+    userId: string, 
+    walletAmount: number,
+    userName: string
+  ): Promise<User> {
     try {
-      return await this.prisma.user.update({
+      const updatedUser = await this.prisma.user.update({
         where: {
           id: BigInt(userId)
         },
@@ -70,6 +72,12 @@ export class DatabaseService {
           walletAmount: true,
         }
       });
+      cacheService.updateUser(userId.toString(), {
+        id: BigInt(userId),
+        name: userName,
+        walletAmount: updatedUser.walletAmount,
+      });
+      return updatedUser;
     } catch (error) {
       console.error('Error updating user wallet:', error);
       throw new Error('Failed to update wallet');
@@ -145,16 +153,23 @@ export class DatabaseService {
   }
 
   async createCategory(categoryName: string): Promise<Category> {
-    try {
-      return await this.prisma.category.create({
-        data: { 
-          name: categoryName.toLowerCase().trim() 
+    let category = cacheService.getCategory(categoryName);
+    if(!category) {
+      try {
+        category = await this.findCategory(categoryName);
+        if(!category) {
+          category = await this.prisma.category.create({
+            data: { 
+              name: categoryName.toLowerCase().trim() 
+            }
+          });
         }
-      });
-    } catch (error) {
-      console.error('Error creating category:', error);
-      throw new Error('Failed to create category');
+      } catch (error) {
+        console.error('Error creating category:', error);
+        throw new Error('Failed to create category');
+      }
     }
+    return category;
   }
 
   async getAllCategories(limit: number = 100): Promise<Category[]> {
@@ -188,6 +203,7 @@ export class DatabaseService {
             gte: subDays(new Date(), days)
           }
         },
+        // to fetch related records
         include: {
           category: {
             select: {
@@ -285,16 +301,20 @@ export class DatabaseService {
   ): Promise<{ user: User, transaction: Transaction }> {
     try {
       return await this.prisma.$transaction(async(prisma) => {
-        const currentUser = await prisma.user.findFirst({
-          where: {
-            id: BigInt(userId)
-          },
-          select: {
-            walletAmount: true
-          }
-        });
-
-        if(!currentUser || currentUser?.walletAmount < amount) {
+        let cached = {
+          walletAmount: cacheService.getUser(userId).walletAmount
+        };
+        if(!cached) {
+          cached = await prisma.user.findFirst({
+            where: {
+              id: BigInt(userId)
+            },
+            select: {
+              walletAmount: true
+            }
+          });
+        }
+        if(!cached || cached.walletAmount < amount) {
           throw new Error('Insufficient balance');
         }
 
@@ -313,6 +333,8 @@ export class DatabaseService {
             walletAmount: true
           }
         });
+
+        cacheService.updateUser(userId, user);
 
         const transaction = await prisma.transaction.create({
           data: {
@@ -351,6 +373,8 @@ export class DatabaseService {
             }
           }
         });
+
+        cacheService.updateUser(userId, user);
 
         const transaction = await prisma.transaction.create({
           data: {
@@ -421,3 +445,6 @@ export class DatabaseService {
     }
   }
 }
+
+const dbService = new DatabaseService();
+export default dbService;

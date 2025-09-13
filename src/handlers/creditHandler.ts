@@ -1,7 +1,6 @@
 import TelegramBot from "node-telegram-bot-api";
 import { Commands, commands, labels } from "../labels";
-import { DatabaseService } from "../services/databaseService";
-import { CacheService } from "../services/cacheService";
+import dbService from "../services/databaseService";
 import { HandlerResponse } from "../types";
 
 class CreditHandler {
@@ -27,22 +26,15 @@ class CreditHandler {
       }
     }
 
-    const userId = BigInt(msg.chat.id);
-    const cacheService = new CacheService();
-    const dbService = new DatabaseService();
+    const userId = msg.chat.id.toString();
     try {
-      const { user } = await dbService.processCredit(userId.toString(), amount);
-
-      const userName = `${msg.chat.first_name || ''} ${msg.chat.last_name || ''}`.trim();
-      cacheService.updateUser(userId.toString(), {
-        id: userId,
-        name: userName,
-        walletAmount: user.walletAmount, 
-      });
-
+      const result = await dbService.processCredit(
+        userId, 
+        amount
+      );
       return {
         success: true,
-        message: msgInfo.message(amount, user.walletAmount),        
+        message: msgInfo.message(amount, result.user.walletAmount),        
       };
     } catch (error) {
       console.error('Credit handler error:', error);

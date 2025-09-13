@@ -1,11 +1,12 @@
 import { getDaysInMonth } from "date-fns";
 import TelegramBot from "node-telegram-bot-api";
-import { CategorySpend, DatabaseService } from "../services/databaseService";
+import dbService from "../services/databaseService";
 import { Commands, commands } from "../labels";
 import { TransactionType } from "../generated/prisma";
-import { HandlerResponse } from "../types";
-
-type Period = '1d' | '1w' | '1m' | '1yr';
+import { 
+  CategorySpend, 
+  HandlerResponse, 
+  Period } from "../types";
 
 class HistoryHandler {
   public static async getTransactionHistory(
@@ -13,19 +14,11 @@ class HistoryHandler {
     args: string[],
   ): Promise<HandlerResponse> {
     const [period] = args;
-    let days;
-    if(this.isPeriod(period)) {
-      days = this.getPastDays(period);
-    } else {
-      days = 365;
-    }
-
-    const userId = BigInt(msg.chat.id);
-    const dbService = new DatabaseService();
-
+    const days = this.getPastDays(period);
+    const userId = msg.chat.id.toString();
     try {
       const transactions = await dbService.getTransactionHistory(
-        userId.toString(),
+        userId,
         days
       );
       
@@ -60,23 +53,15 @@ class HistoryHandler {
     args: string[]
   ) {
     const [period] = args;
-    let days;
-    if(this.isPeriod(period)) {
-      days = this.getPastDays(period);
-    } else {
-      days = 365;
-    }
-
-    const userId = BigInt(msg.chat.id);
-    const dbService = new DatabaseService();
-
+    const days = this.getPastDays(period);
+    const userId = msg.chat.id.toString();
     try {
       const categorySpends = await dbService.getCategorySpendBreakdown(
-        userId.toString(),
+        userId,
         days
       );
-      const msgInfo = commands[Commands.Breakdown];
 
+      const msgInfo = commands[Commands.Breakdown];
       if(!categorySpends.length) {
         return {
           success: false,
@@ -103,7 +88,7 @@ class HistoryHandler {
   }
 
   private static getPastDays(
-    period: Period = '1yr'
+    period: string
   ) {
     switch(period) {
       case '1d': 
@@ -115,11 +100,6 @@ class HistoryHandler {
       default:
         return 365;
     }
-  } 
-
-  // value is Period: if this function returns true, then value must be a type of Period
-  private static isPeriod(value: string): value is Period {
-    return ['1d', '1w', '1m', '1yr'].includes(value);
   } 
 
   private static formatTransactionHistory(
@@ -151,11 +131,9 @@ class HistoryHandler {
     categorySpends: CategorySpend[],
     period: Period
   ) {
-    const dbService = new DatabaseService();
-
     const categoryIds = categorySpends
       .filter(cs => cs.categoryId !== null)
-      .map(cs => cs.categoryId!);
+      .map(cs => cs.categoryId);
 
     const categories = await dbService.getPrismaInstance().category.findMany({
       where: {

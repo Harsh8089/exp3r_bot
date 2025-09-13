@@ -1,7 +1,7 @@
 import TelegramBot from "node-telegram-bot-api";
-import { DatabaseService } from "../services/databaseService";
+import dbService from "../services/databaseService";
 import { Commands, commands } from "../labels";
-import { CacheService } from "../services/cacheService";
+import cacheService from "../services/cacheService";
 import { HandlerResponse } from "../types";
 
 class UndoHandler {
@@ -9,13 +9,10 @@ class UndoHandler {
     msg: TelegramBot.Message
   ): Promise<HandlerResponse> {
     const msgInfo = commands[Commands.Undo];
-    const userId = BigInt(msg.chat.id);
-    
-    const cacheService = new CacheService();
-    const dbService = new DatabaseService();
+    const userId = msg.chat.id.toString();
 
     try {
-      const latestTransaction = await dbService.getLatestTransaction(userId.toString());
+      const latestTransaction = await dbService.getLatestTransaction(userId);
       if (!latestTransaction) {
         return {
           success: false,
@@ -24,7 +21,7 @@ class UndoHandler {
       }
 
       const user = await dbService.undoLastTransaction(
-        userId.toString(),
+        userId,
         latestTransaction
       );
 

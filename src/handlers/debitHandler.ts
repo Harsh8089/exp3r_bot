@@ -1,7 +1,6 @@
 import TelegramBot from "node-telegram-bot-api";
 import { Commands, commands, labels } from "../labels";
-import { CacheService } from "../services/cacheService";
-import { DatabaseService } from "../services/databaseService";
+import dbService from "../services/databaseService";
 import { HandlerResponse } from "../types";
 
 export class DebitHandler {
@@ -26,33 +25,14 @@ export class DebitHandler {
       }
     }
 
-    const userId = BigInt(msg.chat.id);
-    const cacheService = new CacheService();
-    const dbService = new DatabaseService();
-
-    let categoryData  = cacheService.getCategory(category);
+    const userId = msg.chat.id.toString();
     try {
-      if(!categoryData) {
-        categoryData = await dbService.findCategory(category) ?? undefined;
-        if(!categoryData) {
-          categoryData = await dbService.createCategory(category);
-        }
-      } 
-      cacheService.setCategory(categoryData.name, categoryData);
-
+      let categoryData = await dbService.createCategory(category);
       const result = await dbService.processDebit(
-        userId.toString(),
+        userId,
         amount,
         categoryData.id
       );
-
-      const name = `${msg.chat.first_name || ''} ${msg.chat.last_name || ''}`.trim();
-      cacheService.updateUser(userId.toString(), {
-        id: userId,
-        walletAmount: result.user.walletAmount,
-        name,
-      });
-
       return {
         success: true,
         message: msgInfo.message(amount, result.user.walletAmount),

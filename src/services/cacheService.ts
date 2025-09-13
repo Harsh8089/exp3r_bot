@@ -68,3 +68,6 @@ export class CacheService {
     this.categoryCache.set(categoryName, categoryData);
   }
 }
+
+const cacheService = new CacheService();
+export default cacheService;
