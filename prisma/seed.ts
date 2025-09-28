@@ -1,4 +1,4 @@
-import { PrismaClient, TransactionType } from "../src/generated/prisma";
+import { PrismaClient, TransactionType } from "@prisma/client";
 const prisma = new PrismaClient();
 
 const user = [
@@ -12,33 +12,33 @@ const user = [
 const transactions = [
   {
     userId: 1,
-    type: TransactionType.SET_WALLET,
+    type: "SET_WALLET",
     amount: 3574.50,
     date: new Date()
   }, 
   {
     userId: 1,
-    type: TransactionType.DEBIT,
+    type: "DEBIT",
     amount: 200,
     category: 'food',
     date: new Date()
   },
   {
     userId: 1,
-    type: TransactionType.CREDIT,
+    type: "CREDIT",
     amount: 34.5,
     date: new Date()
   },
   {
     userId: 1,
-    type: TransactionType.DEBIT,
+    type: "DEBIT",
     amount: 300,
     category: 'travel',
     date: new Date()
   },
   {    
     userId: 1,
-    type: TransactionType.DEBIT,
+    type: "DEBIT",
     amount: 100,
     category: 'food',
     date: new Date()
@@ -121,7 +121,7 @@ async function seedTransactions() {
         await prisma.transaction.create({
           data: {
             userId: u.id,
-            type: t.type,
+            type: t.type as TransactionType,
             amount: t.amount,
             categoryId: categoryId,
             date: t.date
