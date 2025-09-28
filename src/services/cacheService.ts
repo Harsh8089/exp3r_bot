@@ -1,5 +1,5 @@
 import { LRUCache } from "lru-cache";
-import { User } from "../generated/prisma";
+import { User } from "@prisma/client";
 
 interface UserData {
   id: string;

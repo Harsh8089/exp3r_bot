@@ -1,11 +1,11 @@
 import { subDays } from "date-fns";
 import { 
-  Category, 
   PrismaClient, 
+  User, 
   Transaction, 
   TransactionType, 
-  User 
-} from "../generated/prisma";
+  Category 
+} from "@prisma/client";
 import cacheService from "./cacheService";
 import { CategorySpend } from "../types";
 

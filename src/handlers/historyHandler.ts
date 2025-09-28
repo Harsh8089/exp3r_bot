@@ -2,11 +2,12 @@ import { getDaysInMonth } from "date-fns";
 import TelegramBot from "node-telegram-bot-api";
 import dbService from "../services/databaseService";
 import { Commands, commands } from "../labels";
-import { TransactionType } from "../generated/prisma";
+import { TransactionType } from "@prisma/client";
 import { 
   CategorySpend, 
   HandlerResponse, 
-  Period } from "../types";
+  Period 
+} from "../types";
 
 class HistoryHandler {
   public static async getTransactionHistory(

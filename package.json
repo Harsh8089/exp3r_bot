@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "pnpm install --frozen-lockfile && tsc -b .",
+    "build": "pnpm install --frozen-lockfile && pnpm prisma generate tsc -b .",
     "start": "tsc -b && node ./dist/bot.js",
     "dev": "ts-node-dev --respawn --ignore-watch node_modules ./src/bot.ts",
     "db:seed": "ts-node-dev prisma/seed.ts"
